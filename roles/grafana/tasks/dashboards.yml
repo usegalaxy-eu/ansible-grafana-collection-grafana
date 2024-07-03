@@ -67,18 +67,50 @@
       loop: "{{ grafana_dashboards }}"
 
 - name: "Import grafana dashboards via api"
-  community.grafana.grafana_dashboard:
-    grafana_url: "{{ grafana_api_url }}"
-    grafana_user: "{{ grafana_security.admin_user }}"
-    grafana_password: "{{ grafana_security.admin_password }}"
-    path: "{{ item }}"
-    message: "Updated by ansible role {{ ansible_role_name }}"
-    state: present
-    overwrite: true
-  no_log: "{{ 'false' if lookup('env', 'CI') else 'true' }}"
-  with_fileglob:
-    - "{{ __tmp_dashboards.path }}/*"
-    - "{{ grafana_dashboards_dir }}/*.json"
+  block:
+    - name: "Create remote grafana dashboard directory"
+      ansible.builtin.tempfile:
+        prefix: grafana.grafana.grafana.
+        state: directory
+      changed_when: false
+      register: __tmp_dashboards_remote
+
+    - name: "Copy dashboards to the remote directory"
+      ansible.builtin.copy:
+       src: "{{ item }}"
+       dest: "{{ __tmp_dashboards_remote.path }}/"
+       mode: "0440"
+      changed_when: false
+      with_fileglob:
+        - "{{ grafana_dashboards_dir }}/*.json"
+        - "{{ __tmp_dashboards.path }}/*.json"
+
+    - name: "Get list of dashboards on the remote directory"
+      ansible.builtin.find:
+        paths:
+          - "{{ __tmp_dashboards_remote.path }}/"
+        patterns: "*.json"
+      changed_when: false
+      register: __tmp_dashboards_remote_list
+
+    - name: "Import dashboards via api"
+      community.grafana.grafana_dashboard:
+        grafana_url: "{{ grafana_api_url }}"
+        grafana_user: "{{ grafana_security.admin_user }}"
+        grafana_password: "{{ grafana_security.admin_password }}"
+        path: "{{ item.path }}"
+        commit_message: "Updated by ansible role {{ ansible_role_name }}"
+        state: present
+        overwrite: true
+      no_log: "{{ 'false' if lookup('env', 'CI') else 'true' }}"
+      with_items: "{{ __tmp_dashboards_remote_list.files }}"
+  always:
+    - name: "Clean up the remote grafana dashboard directory"
+      ansible.builtin.file:
+        path: "{{ __tmp_dashboards_remote.path }}"
+        state: absent
+      when: __tmp_dashboards_remote is defined
+      changed_when: false        
   when: "not grafana_use_provisioning"
 
 - name: "Import grafana dashboards through provisioning"
